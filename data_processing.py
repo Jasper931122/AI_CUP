@@ -11,6 +11,10 @@ predict_acct = df_predict['acct']
 alert_acct_id = {
     j:f'A{i+1:0>5}'  for i, j in enumerate(alert_acct)
 }
+reversed_alert_acct_id = {
+    j: i for i, j in alert_acct_id.items()
+}
+df_alert['id'] = df_alert['acct'].map(alert_acct_id)
 
 alert_from_acct = df_txn[all_acct.isin(alert_acct)]
 alert_to_acct = df_txn[df_txn['to_acct'].isin(alert_acct)]
@@ -30,6 +34,14 @@ cols = ['id'] + [c for c in final_alert_df.columns if c != 'id']
 final_alert_df = final_alert_df[cols]
 final_alert_df = final_alert_df.sort_values(by=['id', 'txn_date', 'txn_time'])
 
+id_to_event = df_alert.set_index('id')['event_date']
+
+final_alert_df = final_alert_df.merge(
+    df_alert[['id', 'event_date']],
+    on='id',
+    how='left'
+)
+final_alert_df[['from_acct', 'to_acct']] = final_alert_df[['from_acct', 'to_acct']].replace(alert_acct_id)
 final_alert_df.to_csv('alert_preprocessing.csv', index=False)
 
 all_acct = pd.concat([final_alert_df['from_acct'], final_alert_df['to_acct']])
