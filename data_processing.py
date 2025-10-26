@@ -9,6 +9,8 @@ all_acct = pd.Series(pd.concat([from_acct, to_acct]).unique())
 alert_acct = df_alert['acct']
 predict_acct = df_predict['acct']
 
+exc = {'TWD':1, 'USD':30.77, 'JPY':0.205, 'CNY':4.48, 'HKD':3.92, 'EUR':35.52, 'AUD':20.08, 'CAD':21.94, 'SGD':23.66, 'CHF':38.27, 'GBP':41.01}
+df_txn['txn_amt'] = df_txn['txn_amt'] * df_txn['currency_type'].map(exc)
 df_txn['is_self_txn'] = df_txn['is_self_txn'].replace({'Y':1, 'N':0, 'UNK':2})
 df_txn['currency_type'] = df_txn['currency_type'].apply(lambda x: 0 if x=='TWD' else 1)
 df_txn['channel_type'] = df_txn['channel_type'].replace('UNK', 0)
