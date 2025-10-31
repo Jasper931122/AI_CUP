@@ -127,6 +127,9 @@ final_predict_df = (
     .rename(columns={'id_list': 'id'})
 )
 
+final_predict_df['from_acct'] = final_predict_df['from_acct'].replace(predict_acct_id)
+final_predict_df['to_acct'] = final_predict_df['to_acct'].replace(predict_acct_id)
+
 ols = ['id'] + [c for c in final_predict_df.columns if c != 'id']
 final_predict_df = final_predict_df[cols]
 
