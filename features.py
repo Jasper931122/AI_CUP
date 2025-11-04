@@ -4,41 +4,6 @@ import numpy as np
 from collections import deque, defaultdict
 from pathlib import Path
 
-required_cols = [
-    'txn_total_count','txn_total_amount','txn_amount_avg','txn_amount_std',
-    'from_total_count','from_txn_ratio','from_total_amount','from_amount_ratio',
-    'from_avg_amount','from_amount_std',
-    'from_amt_1_1000_count','from_amt_1001_5000_count','from_amt_5001_30000_count',
-    'from_amt_30001_50000_count','from_amt_50001_plus_count',
-    'from_amt_1_1000_ratio','from_amt_1001_5000_ratio','from_amt_5001_30000_ratio',
-    'from_amt_30001_50000_ratio','from_amt_50001_plus_ratio',
-    'to_total_count','to_txn_ratio','to_total_amount','to_amount_ratio',
-    'to_avg_amount','to_amount_std',
-    'to_amt_1_1000_count','to_amt_1001_5000_count','to_amt_5001_30000_count',
-    'to_amt_30001_50000_count','to_amt_50001_plus_count',
-    'to_amt_1_1000_ratio','to_amt_1001_5000_ratio','to_amt_5001_30000_ratio',
-    'to_amt_30001_50000_ratio','to_amt_50001_plus_ratio',
-    'txn_duration_days','txn_active_days','txn_active_ratio','txn_avg_per_day',
-    'txn_00_06_count','txn_06_12_count','txn_12_18_count','txn_18_24_count',
-    'txn_days_over_5_count','from_days_over_3_count','to_days_over_3_count',
-    'acct_unique_count','acct_unique_to_count','acct_unique_from_count',
-    'acct_txn_with_alert_count','acct_from_to_alert_count','acct_to_from_alert_count',
-    'acct_from_to_alert_3','acct_to_from_alert_3',
-    'self_txn_count','foreign_currency_count',
-    'channel_99_count','channel_atm_count','channel_unk_count',
-    'channel_mobile_count','channel_online_count','channel_counter_count',
-    'txn_ratio_last_1d','txn_ratio_last_3d','txn_ratio_last_7d',
-    'from_ratio_last_1d','from_ratio_last_3d','from_ratio_last_7d',
-    'to_ratio_last_1d','to_ratio_last_3d','to_ratio_last_7d',
-    'txn_amount_ratio_last_1d','txn_amount_ratio_last_3d','txn_amount_ratio_last_7d',
-    'from_amount_ratio_last_1d','from_amount_ratio_last_3d','from_amount_ratio_last_7d',
-    'to_amount_ratio_last_1d','to_amount_ratio_last_3d','to_amount_ratio_last_7d',
-    'acct_overlap_ratio_last_1d','acct_overlap_ratio_last_3d','acct_overlap_ratio_last_7d',
-    'from_overlap_ratio_last_1d','from_overlap_ratio_last_3d','from_overlap_ratio_last_7d',
-    'to_overlap_ratio_last_1d','to_overlap_ratio_last_3d','to_overlap_ratio_last_7d',
-    'from_to_amount_ratio_last_1d','from_to_amount_ratio_last_3d','from_to_amount_ratio_last_7d'
-]
-
 # ===== 可調參數 =====
 SMALL_BINS = [(1,1000),(1001,5000),(5001,30000),(30001,50000),(50001, np.inf)]
 TOP_DAY_RATIO   = 0.2
@@ -218,6 +183,52 @@ def _bfs_has_alert(start, adj, alert_ids, max_depth=3):
                 q.append((v, d+1))
     return 0
 
+import numpy as np
+import pandas as pd
+
+def add_daily_threshold_features(df: pd.DataFrame,
+                                 feat: pd.DataFrame,
+                                 th_txn_per_day: int = 5,
+                                 th_send_per_day: int = 3,
+                                 th_recv_per_day: int = 3) -> pd.DataFrame:
+    """
+    依門檻 N 計算三個特徵：
+      - txn_days_over_5_count      → 單日總交易次數 > th_txn_per_day 的天數（每個 id）
+      - from_days_over_3_count     → 單日匯款次數  > th_send_per_day 的天數（每個 id）
+      - to_days_over_3_count       → 單日收款次數  > th_recv_per_day 的天數（每個 id）
+    傳回合併好的 feat
+    """
+    # 確保日期是 datetime
+    if not np.issubdtype(df['txn_date'].dtype, np.datetime64):
+        df = df.copy()
+        df['txn_date'] = pd.to_datetime(df['txn_date'], errors='coerce')
+
+    send_mask = (df['id'] == df['from_acct'])
+    recv_mask = (df['id'] == df['to_acct'])
+
+    # 全部交易：單日筆數
+    daily_all = df.groupby(['id', 'txn_date']).size().rename('day_cnt').reset_index()
+    over_txn = (daily_all['day_cnt'] > th_txn_per_day)
+    over_txn = daily_all.loc[over_txn].groupby('id').size().rename('txn_days_over_5_count')
+
+    # 匯款：單日筆數
+    daily_send = df[send_mask].groupby(['id', 'txn_date']).size().rename('day_cnt').reset_index()
+    over_send = (daily_send['day_cnt'] > th_send_per_day)
+    over_send = daily_send.loc[over_send].groupby('id').size().rename('from_days_over_3_count')
+
+    # 收款：單日筆數
+    daily_recv = df[recv_mask].groupby(['id', 'txn_date']).size().rename('day_cnt').reset_index()
+    over_recv = (daily_recv['day_cnt'] > th_recv_per_day)
+    over_recv = daily_recv.loc[over_recv].groupby('id').size().rename('to_days_over_3_count')
+
+    # 併回（缺值補 0）
+    out = feat.merge(over_txn.reset_index(), on='id', how='left')
+    out = out.merge(over_send.reset_index(), on='id', how='left')
+    out = out.merge(over_recv.reset_index(), on='id', how='left')
+    return out.fillna({'txn_days_over_5_count': 0,
+                       'from_days_over_3_count': 0,
+                       'to_days_over_3_count': 0})
+
 
 def build_features(
     mode: str,                         # 'alert' / 'normal' / 'predict'
@@ -317,6 +328,22 @@ def build_features(
         .merge(grp_recv, on='id', how='left')
         .merge(recv_bins_df, on='id', how='left')
     ).fillna(0)
+
+    _from_den = feat['from_total_count'].replace(0, np.nan)
+
+    feat['from_amt_1_1000_ratio']      = (feat['from_amt_1_1000_count']      / _from_den).fillna(0.0)
+    feat['from_amt_1001_5000_ratio']   = (feat['from_amt_1001_5000_count']   / _from_den).fillna(0.0)
+    feat['from_amt_5001_30000_ratio']  = (feat['from_amt_5001_30000_count']  / _from_den).fillna(0.0)
+    feat['from_amt_30001_50000_ratio'] = (feat['from_amt_30001_50000_count'] / _from_den).fillna(0.0)
+    feat['from_amt_50001_plus_ratio']  = (feat['from_amt_50001_plus_count']  / _from_den).fillna(0.0)
+
+    _to_den = feat['to_total_count'].replace(0, np.nan)
+
+    feat['to_amt_1_1000_ratio']      = (feat['to_amt_1_1000_count']      / _to_den).fillna(0.0)
+    feat['to_amt_1001_5000_ratio']   = (feat['to_amt_1001_5000_count']   / _to_den).fillna(0.0)
+    feat['to_amt_5001_30000_ratio']  = (feat['to_amt_5001_30000_count']  / _to_den).fillna(0.0)
+    feat['to_amt_30001_50000_ratio'] = (feat['to_amt_30001_50000_count'] / _to_den).fillna(0.0)
+    feat['to_amt_50001_plus_ratio']  = (feat['to_amt_50001_plus_count']  / _to_den).fillna(0.0)
 
     feat['from_txn_ratio'] = np.where(
         feat['txn_total_count'] > 0, feat['from_total_count'] / feat['txn_total_count'], 0
@@ -450,9 +477,13 @@ def build_features(
     # === 加上最近 1/3/7 天特徵 ===
     feat = add_recent_window_features(df, feat, windows=(1,3,7))
 
-    # === 輸出 ===
-    feat.to_csv(out_path, index=False, encoding='utf-8-sig')
-
+    # === 單日門檻 ===
+    feat = add_daily_threshold_features(
+        df, feat,
+        th_txn_per_day=5,   # 想改門檻就改這三個數
+        th_send_per_day=3,
+        th_recv_per_day=3
+    )
 
     # ===== 輸出 =====
     feat.to_csv(out_path, index=False, encoding='utf-8-sig')
@@ -462,5 +493,5 @@ def build_features(
 
 alert_ids = set(pd.read_csv("alert_preprocessing.csv")['id'])  # 若有 id 欄位
 build_features("alert", alert_ids=alert_ids, compute_three_hop=True)
-# build_features("normal", alert_ids=alert_ids, compute_three_hop=True)
-# build_features("predict", alert_ids=alert_ids, compute_three_hop=True)
+build_features("normal", alert_ids=alert_ids, compute_three_hop=True)
+build_features("predict", alert_ids=alert_ids, compute_three_hop=True)
